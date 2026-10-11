@@ -286,7 +286,10 @@ export default function CornerStraightBalance({ races }: Props) {
         600 m) that still loads the car at 1.6 g or more, where drag and power decide the time rather than grip;
         braking and acceleration zones count as straight. Switch to <strong>%</strong> to read each gap as a share
         of the reference car's time over that stretch, which is the fairer comparison across circuits — corner
-        time swings far more track to track than straight time does.
+        time swings far more track to track than straight time does. The telemetry runs at ~3.7 Hz with jittered
+        timestamps, so each section boundary is timed to about a tenth and a round's corner or straight total
+        carries a few tenths of noise; a fast-curve share of a few hundred metres is within that, which is why
+        the season view is the one to trust.
       </p>
     </div>
   );

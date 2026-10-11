@@ -42,6 +42,8 @@ function teamSeries<R extends { round: number; teams: { team: string }[] }>(
 }
 
 const mean = (xs: number[]) => xs.reduce((s, x) => s + x, 0) / Math.max(1, xs.length);
+/** Fast curves shorter than this in total are left out of the curve view. */
+const MIN_CURVE_SHARE_M = 300;
 
 export default function SeasonTrendChart({ trends, metric, height = 380 }: { trends: SeasonTrends; metric: SeasonMetric; height?: number }) {
   const [unit, setUnit] = useState<Unit>("s");
@@ -169,11 +171,15 @@ export default function SeasonTrendChart({ trends, metric, height = 380 }: { tre
       rounds = races.map(r => ({ round: r.round, meetingName: r.meetingName }));
       const gapOf = (t: CornerStraightRace["teams"][number]) =>
         csMode === "corners" ? t.cornerGap : csMode === "curves" ? (t.curveGap ?? 0) : t.straightGap;
+      // Section timing resolves to about a tenth per boundary, so a circuit
+      // whose fast curves add up to one 90 m kink (Singapore, Monaco, Austria)
+      // would plot ±15% of noise there. Leave the round out of the curve view.
+      const tooShort = (r: CornerStraightRace) => csMode === "curves" && (r.curveDistance ?? 0) < MIN_CURVE_SHARE_M;
       const refTime = (r: CornerStraightRace) => {
         const ref = r.teams.find(t => t.team === r.referenceTeam) ?? r.teams[0];
         return csMode === "corners" ? ref?.cornerTime ?? 0 : csMode === "curves" ? ref?.curveTime ?? 0 : ref?.straightTime ?? 0;
       };
-      series = teamSeries(races, (r, t) => (u === "s" ? gapOf(t) : (refTime(r) > 0 ? (gapOf(t) / refTime(r)) * 100 : null)),
+      series = teamSeries(races, (r, t) => (tooShort(r) ? null : u === "s" ? gapOf(t) : (refTime(r) > 0 ? (gapOf(t) / refTime(r)) * 100 : null)),
         pts => mean(pts));
       zeroLabel = "reference";
     }
@@ -235,7 +241,7 @@ export default function SeasonTrendChart({ trends, metric, height = 380 }: { tre
         {metric === "topSpeed" && "Each team's best speed-trap reading of the weekend — its quicker driver — by round. Qualifying is the cleanest read (low fuel, DRS open, one lap); the race view includes tows, the clear-air view takes them out where the timing intervals allow. Circuits differ, so read the spread between teams at a round rather than the level."}
         {metric === "clipping" && "On each team's fastest qualifying lap: stretches at full throttle where the car still lost speed outside the DRS zones — the power unit clipping its deployment. Speed lost is the sum of the drops; a team that clips is leaving straight-line speed on the table, usually a sign of an energy-limited lap."}
         {metric === "conversion" && "Mean places gained from grid to flag by each team's classified drivers. Above the line the team converted better than its grid slots; strategy, incidents and others' misfortune all land here."}
-        {isCs && "A team's gap through that part of the lap on its fastest qualifying lap, against the fastest team of the weekend. Above the reference line means quicker there — which a team can manage while still losing the lap, since the corner, curve and straight gaps add up to the total."}
+        {isCs && "A team's gap through that part of the lap on its fastest qualifying lap, against the fastest team of the weekend. Above the reference line means quicker there — which a team can manage while still losing the lap, since the corner, curve and straight gaps add up to the total. Each section boundary is timed to about a tenth, so a round's corner or straight total carries a few tenths of noise: read the trend across rounds, not one weekend. Circuits with under 300 m of fast curves are left out of the curve view."}
       </p>
     </div>
   );

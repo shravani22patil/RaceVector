@@ -139,7 +139,7 @@ export default function SeasonTrendsPage() {
         <Section
           id={SEASON_SECTIONS.cornerStraightEvolution}
           title="Corner, curve & straight evolution"
-          hint="The same chart shape as constructor qualifying, but on one part of the lap at a time. Switch between corners, fast curves and straights to see which way a team's development went — the axis is signed, so a line can sit above the reference."
+          hint="The same chart shape as constructor qualifying, but on one part of the lap at a time. Switch between corners, fast curves and straights to see which way a team's development went — the axis is signed, so a line can sit above the reference. Resolution is a few tenths per round, so the trend is the story; circuits without a real fast-curve share sit out of the curve view."
           share={{ meta: `${year} corner & straight evolution`, filename: `openf1ow-corner-straight-evolution-${year}` }}
         >
           <SeasonTrendChart trends={trends} metric="corners" />
@@ -150,7 +150,7 @@ export default function SeasonTrendsPage() {
         <Section
           id={SEASON_SECTIONS.cornerStraightBalance}
           title="Corners, curves & straights"
-          hint="Which part of the lap each team's deficit comes from. The gaps are a decomposition of the same qualifying lap, so they sum to the team's lap-time gap — a car can be quicker through the corners and still lose the lap on the straights."
+          hint="Which part of the lap each team's deficit comes from. The gaps are a decomposition of the same qualifying lap, so they sum to the team's lap-time gap — a car can be quicker through the corners and still lose the lap on the straights. Each part is good to a few tenths at one round; the season view averages that out."
           share={{ meta: `${year} corners vs straights`, filename: `openf1ow-corners-straights-${year}` }}
         >
           <CornerStraightBalance races={trends.cornerStraight!} />

@@ -10,7 +10,7 @@
 // Method:
 //   1. Put every trace on a shared lap-fraction axis. Two laps fetched
 //      separately don't start at quite the same point on the track, and
-//      mergeDistance's polyline integration under-measures by a slightly
+//      mergeDistance's polyline calibration under-measures by a slightly
 //      different amount each lap. Anchoring on each lap's own start time and
 //      duration cancels both, and makes the section times add up to the lap
 //      time exactly — without it, a phantom tenth of start-line offset lands
@@ -322,9 +322,8 @@ function prepare(trace: SegmentTrace): Prepared | null {
   for (let i = 0; i < data.length; i++) {
     const p = data[i];
     const dist = p.distance ?? 0;
-    // mergeDistance snaps several car_data samples onto the same location
-    // point, so distance repeats; keep the first of each run to leave the
-    // distance axis strictly increasing.
+    // Distance can stall (a car stopped, or samples past the last fix); keep
+    // the first of each run to leave the axis strictly increasing.
     if (pts.length && dist <= pts[pts.length - 1].dist) continue;
     // A frozen sample's throttle and brake are the 104 sentinel, which the
     // driving-based fallback would read as flat out and hard on the brakes

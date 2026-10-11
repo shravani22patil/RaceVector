@@ -47,8 +47,8 @@ const TELEMETRY_TAIL_MS = 2000;
 /** Telemetry endpoints rate-limit harder than the session ones. */
 const TELEMETRY_DELAY_MS = 900;
 
-function telemetryCachePath(sk, driverNumber, lapNumber) {
-  return join(CACHE_DIR, `tel_${sk}_${driverNumber}_${lapNumber}.json`);
+function telemetryCachePath(endpoint, sk, driverNumber, lapNumber) {
+  return join(CACHE_DIR, `${endpoint}_${sk}_${driverNumber}_${lapNumber}.json`);
 }
 
 async function fetchTelemetryRange(endpoint, sk, driverNumber, startIso, endIso) {
@@ -69,30 +69,38 @@ async function fetchTelemetryRange(endpoint, sk, driverNumber, startIso, endIso)
   return null;
 }
 
-/** car_data + location for one lap, merged into distance-stamped samples.
- *  Cached on disk keyed by session/driver/lap — a season's telemetry is a few
- *  hundred fetches, so a re-run should never pay for them twice. */
-async function fetchLapTelemetry(sk, driverNumber, lap) {
-  const cached = telemetryCachePath(sk, driverNumber, lap.lap_number);
+/** One endpoint's rows for a lap, from the on-disk cache or the API. The raw
+ *  rows are what is cached, not the merged result, so a change to
+ *  mergeDistance reaches every cached lap on the next run without refetching.
+ *  (Older runs cached the merged output as tel_*.json; those files are no
+ *  longer read.) Returns null when the API had nothing. */
+async function cachedTelemetry(endpoint, sk, driverNumber, lap, startIso, endIso) {
+  const cached = telemetryCachePath(endpoint, sk, driverNumber, lap.lap_number);
   if (existsSync(cached)) {
     const data = JSON.parse(readFileSync(cached, "utf-8"));
     if (Array.isArray(data) && data.length > 0) return data;
   }
+  const data = await fetchTelemetryRange(endpoint, sk, driverNumber, startIso, endIso);
+  await sleep(TELEMETRY_DELAY_MS);
+  if (Array.isArray(data) && data.length > 0) writeFileSync(cached, JSON.stringify(data));
+  return data;
+}
+
+/** car_data + location for one lap, merged into distance-stamped samples. */
+async function fetchLapTelemetry(sk, driverNumber, lap) {
   // OpenF1 rejects the raw "+00:00" offset that comes back on date_start with
   // a 422; normalise both bounds to ISO-Z.
   const startIso = new Date(lap.date_start).toISOString();
   const endIso = new Date(new Date(lap.date_start).getTime() + lap.lap_duration * 1000 + TELEMETRY_TAIL_MS).toISOString();
 
-  const cd = await fetchTelemetryRange("car_data", sk, driverNumber, startIso, endIso);
+  const cd = await cachedTelemetry("car_data", sk, driverNumber, lap, startIso, endIso);
   if (!cd?.length) return null;
-  await sleep(TELEMETRY_DELAY_MS);
-  const loc = await fetchTelemetryRange("location", sk, driverNumber, startIso, endIso);
+  const loc = await cachedTelemetry("location", sk, driverNumber, lap, startIso, endIso);
 
   const merged = mergeDistance(cd, loc || []);
   // Without location data every sample sits at distance 0 and the segmentation
-  // has nothing to cut on, so don't cache a useless result.
+  // has nothing to cut on.
   if (!merged.length || !merged.some(p => (p.distance ?? 0) > 0)) return null;
-  writeFileSync(cached, JSON.stringify(merged));
   return merged;
 }
 
@@ -128,7 +136,6 @@ async function cornerStraightForRace(race) {
   const traces = [];
   for (const c of candidates) {
     const data = await fetchLapTelemetry(qualiSk, c.driverNumber, c.lap);
-    await sleep(TELEMETRY_DELAY_MS);
     if (!data) continue;
     traces.push({
       data,
