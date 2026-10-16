@@ -2,8 +2,6 @@
 
 RaceVector is an open-source Formula 1 data exploration and race-analysis app powered by the [OpenF1 API](https://openf1.org). It is intended for F1 fans and data-minded users who want to explore race results, driver telemetry, pace, tyre strategy, and race events.
 
-**Source:** [github.com/vassilispapadop/openf1ow](https://github.com/vassilispapadop/openf1ow)
-
 ## Features
 
 - **Race Insights dashboard** - evidence-led verdicts, race pace rankings, lap-time evolution, and links to driver-level data.
