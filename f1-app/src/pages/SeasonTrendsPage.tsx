@@ -54,7 +54,7 @@ export default function SeasonTrendsPage() {
           <code style={{ ...sty.mono, background: C.surface, padding: "2px 6px", borderRadius: 4 }}>
             npm run trends -- --year {year}
           </code>
-          {" "}— it reads OpenF1 data, runs the season-level aggregations, and uploads to R2.
+          {" "}— season trend artifacts require persistent storage, which is not configured for this deployment.
         </p>
       </div>
     );

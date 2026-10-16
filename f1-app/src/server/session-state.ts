@@ -1,14 +1,13 @@
 // Where a session is in its life decides how long its data may be cached.
 //
 //   upcoming  — before the paywall window opens: nothing worth caching long
-//   live      — ±30 min around the session: OpenF1 paywalls the public API,
-//               so serve whatever R2 has and never spend upstream calls
+//   live      — ±30 min around the session: OpenF1 may paywall the public API
 //   recent    — up to 48 h after the end: results, penalties and late laps
 //               still arrive, so refresh every 15 minutes
 //   settled   — after that: immutable, cache forever
 //
-// The window comes from the `sessions?year=` list the proxy already caches
-// (1 h TTL), with a per-session lookup as fallback for older seasons.
+// The window comes from the current year's session list, with a per-session
+// lookup as fallback for older seasons. Both are memoized in this isolate.
 
 export type SessionState = "upcoming" | "live" | "recent" | "settled" | "unknown";
 
@@ -37,57 +36,42 @@ function toWindow(r: Row): SessionWindow | null {
   return { session_key: r.session_key, meeting_key: r.meeting_key, date_start: s, date_end: e, year: r.year ?? new Date(s).getUTCFullYear() };
 }
 
-/** Rows of the current year's session list — from R2 if fresh, else upstream. */
-async function currentYearRows(bucket: R2Bucket, fetcher: Fetcher, year: number): Promise<Row[]> {
+/** Rows of the current year's session list, fetched at most once per memo window. */
+async function currentYearRows(fetcher: Fetcher, year: number): Promise<Row[]> {
   if (yearList && Date.now() - yearList.at < MEMO_MS) return yearList.rows;
-  const key = `sessions?year=${year}`;
   let rows: Row[] | null = null;
   try {
-    const obj = await bucket.get(key);
-    if (obj) {
-      const fetchedAt = Number(obj.customMetadata?.fetchedAt) || obj.uploaded.getTime();
-      if (Date.now() - fetchedAt < 3_600_000) rows = JSON.parse(await obj.text());
+    const up = await fetcher(`/sessions?year=${year}`);
+    if (up.ok) {
+      const parsed: unknown = JSON.parse(up.body);
+      if (Array.isArray(parsed)) rows = parsed as Row[];
     }
-  } catch { /* fall through */ }
-  if (!rows) {
-    try {
-      const up = await fetcher(`/sessions?year=${year}`);
-      if (up.ok) {
-        rows = JSON.parse(up.body);
-        await bucket.put(key, up.body, { httpMetadata: { contentType: "application/json" }, customMetadata: { fetchedAt: String(Date.now()) } });
-      }
-    } catch { /* keep null */ }
+  } catch {
+    // A failed lookup is memoized briefly to avoid retrying for every feed in a bundle.
   }
   yearList = { rows: rows ?? [], at: Date.now() };
   return yearList.rows;
 }
 
-export async function getSessionWindow(sk: number, bucket: R2Bucket, fetcher: Fetcher): Promise<SessionWindow | null> {
+export async function getSessionWindow(sk: number, fetcher: Fetcher): Promise<SessionWindow | null> {
   const m = memo.get(sk);
   if (m && Date.now() - m.at < MEMO_MS) return m.w;
   const year = new Date().getUTCFullYear();
   let w: SessionWindow | null = null;
-  const rows = await currentYearRows(bucket, fetcher, year);
+  const rows = await currentYearRows(fetcher, year);
   const hit = rows.find(r => r.session_key === sk);
   if (hit) w = toWindow(hit);
   if (!w) {
-    // Older season (or the list is stale): one lookup, cached in R2 forever.
-    const key = `sessions?session_key=${sk}`;
+    // Older season (or the list is stale): one memoized lookup.
     try {
-      const obj = await bucket.get(key);
-      const rowsOne: Row[] | null = obj ? JSON.parse(await obj.text()) : null;
-      if (rowsOne?.[0]) w = toWindow(rowsOne[0]);
-      else {
-        const up = await fetcher(`/sessions?session_key=${sk}`);
-        if (up.ok) {
-          const parsed: Row[] = JSON.parse(up.body);
-          if (parsed[0]) {
-            w = toWindow(parsed[0]);
-            await bucket.put(key, up.body, { httpMetadata: { contentType: "application/json" }, customMetadata: { fetchedAt: String(Date.now()) } });
-          }
-        }
+      const up = await fetcher(`/sessions?session_key=${sk}`);
+      if (up.ok) {
+        const parsed: Row[] = JSON.parse(up.body);
+        if (parsed[0]) w = toWindow(parsed[0]);
       }
-    } catch { /* unknown */ }
+    } catch {
+      // An unknown session remains unknown until the memo expires.
+    }
   }
   memo.set(sk, { w, at: Date.now() });
   return w;

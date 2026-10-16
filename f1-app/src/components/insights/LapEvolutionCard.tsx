@@ -15,7 +15,7 @@ import { useSelection } from "../../contexts/SelectionContext";
 const BAND_COLOR: Record<string, string> = { SC: "rgba(255,181,71,0.10)", VSC: "rgba(255,181,71,0.06)", RED: "rgba(255,84,114,0.12)" };
 const CAP = 1.08;
 
-export default function LapEvolutionCard() {
+export default function LapEvolutionCard({ compact = false }: { compact?: boolean }) {
   const { model } = useSessionModel();
   const sel = useSelection();
   const built = useMemo(() => {
@@ -23,9 +23,11 @@ export default function LapEvolutionCard() {
     const timed = model.laps.filter(l => l.lap_duration && l.lap_duration > 0 && !hasFlag(l.flags, LapFlag.PIT_IN | LapFlag.PIT_OUT | LapFlag.LAP1));
     if (!timed.length) return null;
     const cap = median(timed.map(l => l.lap_duration as number)) * CAP;
-    const series: Series[] = model.drivers
+    const drivers = model.drivers
       .slice()
-      .sort((a, b) => (a.classification.position ?? 99) - (b.classification.position ?? 99))
+      .sort((a, b) => (a.classification.position ?? 99) - (b.classification.position ?? 99));
+    const shownDrivers = compact ? drivers.slice(0, 6) : drivers;
+    const series: Series[] = shownDrivers
       .map(d => ({
         key: String(d.driver.driver_number),
         label: d.driver.name_acronym,
@@ -40,20 +42,23 @@ export default function LapEvolutionCard() {
     const bands = model.neutralisations.filter(n => n.kind !== "YELLOW").map(n => ({ from: n.lapStart - 0.5, to: n.lapEnd + 0.5, color: BAND_COLOR[n.kind], label: n.kind }));
     const lo = Math.min(...timed.map(l => l.lap_duration as number));
     return { series, bands, domain: [lo - 0.3, cap] as [number, number], focus: new Set(series.slice(0, 6).map(s => s.key)), totalLaps: model.totalLaps };
-  }, [model]);
+  }, [model, compact]);
   if (!model || !built) return null;
 
   return (
     <Section
       id={SECTION_IDS.lapEvolution}
       title="Lap-time evolution"
-      hint="Every driver's lap time, lap by lap. Pit in/out laps and lap 1 are left out; laps slower than 8 % over the field median (safety car, damage) fall outside the frame. Bands mark safety-car, VSC and red-flag periods."
+      hint={compact
+        ? "Lap times by lap for the six highest-placed drivers with usable data. Pit in/out laps and lap 1 are left out; very slow laps fall outside the frame. Open Pace for the full field."
+        : "Every driver's lap time, lap by lap. Pit in/out laps and lap 1 are left out; laps slower than 8 % over the field median (safety car, damage) fall outside the frame. Bands mark safety-car, VSC and red-flag periods."}
       method={{ summary: "Raw lap durations from the timing feed. Teammates share a colour; the second car of each team is dashed. Hover for the full order on any lap; click a legend entry to hide it, alt-click to isolate." }}
+      dense={compact}
       share={{ meta: "lap-time evolution", filename: "openf1ow-lap-evolution" }}
     >
       <LineChart
         series={built.series}
-        height={400}
+        height={compact ? 240 : 400}
         curve="linear"
         x={{ domain: [1, built.totalLaps], format: l => `Lap ${l}`, label: "Lap" }}
         y={{ domain: built.domain, format: y => fmt.lapTime(y), zeroLine: false, targetTicks: 6 }}
@@ -65,7 +70,7 @@ export default function LapEvolutionCard() {
         format={y => fmt.lapTime(y)}
         tipTitle={l => `Lap ${l}`}
         endDots={false}
-        legend={{ columns: 2, compact: true, hint: true }}
+        legend={{ columns: 2, compact: true, hint: !compact }}
         ariaLabel="Lap times by lap for every driver"
       />
     </Section>

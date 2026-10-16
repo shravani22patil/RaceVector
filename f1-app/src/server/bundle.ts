@@ -1,5 +1,5 @@
 // GET /api/session/:sk/bundle — everything the engine's SessionModel ingests,
-// in one response, assembled from R2 through resolveResource.
+// in one response, fetched from OpenF1 through resolveResource.
 //
 // The request path does no heavy work: the parts' JSON is spliced together
 // as strings (never parsed and re-serialised), and intervals come only from
@@ -13,9 +13,9 @@
 // assembleBundle() is shared with the insights route, which parses the body
 // once to run the engine.
 
-import { resolveResource, type CacheEnv, type Resolved } from "./r2-cache";
+import { resolveResource, type CacheEnv, type Resolved, type WorkerContext } from "./openf1-cache";
 import { getSessionWindow, classifyState, type SessionState } from "./session-state";
-import { fetchUpstreamOnce } from "./r2-cache";
+import { fetchUpstreamOnce } from "./openf1-cache";
 
 const OPTIONAL = ["stints", "pit", "position", "race_control", "session_result", "weather", "overtakes"] as const;
 
@@ -54,8 +54,8 @@ export type Assembled =
   | { ok: true; body: string; contentHash: string; meta: BundleMeta; state: SessionState }
   | { ok: false; status: number; body: string };
 
-export async function assembleBundle(sk: number, env: CacheEnv, ctx: ExecutionContext): Promise<Assembled> {
-  const get = (path: string) => resolveResource(path, env, ctx).catch((): Resolved => ({
+export async function assembleBundle(sk: number, env: CacheEnv, ctx: WorkerContext, origin?: string): Promise<Assembled> {
+  const get = (path: string) => resolveResource(path, env, ctx, origin).catch((): Resolved => ({
     status: 502, body: "", xcache: "ERROR", policy: { ttl: 0, edgeMaxAge: 0, state: "unknown", settledAt: null, sk }, fetchedAt: null, upstreamCalls: 0,
   }));
 
@@ -92,15 +92,11 @@ export async function assembleBundle(sk: number, env: CacheEnv, ctx: ExecutionCo
     } catch { /* keep [] */ }
   }
 
-  const window = await getSessionWindow(sk, env.F1_DATA, fetchUpstreamOnce);
+  const window = await getSessionWindow(sk, fetchUpstreamOnce);
   const state: SessionState = classifyState(window);
 
-  let intervalsBody = "[]";
-  let intervalsSource: BundleMeta["intervals"] = "none";
-  try {
-    const d = await env.F1_DATA.get(`derived/${sk}/intervals-window.json`);
-    if (d) { intervalsBody = await d.text(); intervalsSource = "derived"; }
-  } catch { /* none */ }
+  const intervalsBody = "[]";
+  const intervalsSource: BundleMeta["intervals"] = "none";
 
   const missing: string[] = [];
   const parts: string[] = [];
@@ -132,12 +128,12 @@ export function edgeForState(state: SessionState, partial: boolean): number {
   return state === "settled" ? 604_800 : state === "recent" ? 300 : 30;
 }
 
-export async function handleBundleRequest(request: Request, env: CacheEnv, ctx: ExecutionContext): Promise<Response | null> {
+export async function handleBundleRequest(request: Request, env: CacheEnv, ctx: WorkerContext): Promise<Response | null> {
   const url = new URL(request.url);
   const m = url.pathname.match(/^\/api\/session\/(\d+)\/bundle\/?$/);
   if (!m) return null;
   const sk = Number(m[1]);
-  const a = await assembleBundle(sk, env, ctx);
+  const a = await assembleBundle(sk, env, ctx, url.origin);
   if (!a.ok) {
     const headers: Record<string, string> = { "Content-Type": "application/json", "X-Cache": "ERROR" };
     if (a.status === 429) headers["Retry-After"] = "12";

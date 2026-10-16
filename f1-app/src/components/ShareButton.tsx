@@ -3,7 +3,7 @@ import { F } from "../lib/styles";
 import { captureCanvas, captureCanvasStack, captureDom, copyToClipboard, downloadPng, uploadShareImage } from "../lib/snapshot";
 import { shareImage, canShareFiles } from "../lib/share";
 
-type Status = "idle" | "copying" | "copied" | "downloaded" | "uploading" | "linked" | "sharing" | "shared" | "error";
+type Status = "idle" | "copying" | "copied" | "downloaded" | "uploading" | "linked" | "sharing" | "shared" | "unavailable" | "error";
 
 // Capability probe for native image sharing (mobile share sheet).
 const CAN_SHARE_IMAGE = canShareFiles([new File([], "x.png", { type: "image/png" })]);
@@ -63,6 +63,7 @@ export default function ShareButton({ canvasRef, canvasRefs, domRef, meta, filen
       const blob = await getBlob();
       if (!blob) { setStatus("error"); setTimeout(() => setStatus("idle"), 2000); return; }
       const url = await uploadShareImage(blob);
+      if (url === "unavailable") { setStatus("unavailable"); setTimeout(() => setStatus("idle"), 2000); return; }
       if (!url) { setStatus("error"); setTimeout(() => setStatus("idle"), 2000); return; }
       const ok = await navigator.clipboard.writeText(url).then(() => true).catch(() => false);
       setStatus(ok ? "linked" : "error");
@@ -91,11 +92,13 @@ export default function ShareButton({ canvasRef, canvasRefs, domRef, meta, filen
     status === "linked" ? "Link copied!" :
     status === "sharing" ? "Sharing…" :
     status === "shared" ? "Shared!" :
+    status === "unavailable" ? "Unavailable" :
     status === "error" ? "Failed" :
     "Share";
   const color =
     status === "copied" || status === "downloaded" || status === "linked" || status === "shared" ? "#22c55e" :
     status === "error" ? "#ef4444" :
+    status === "unavailable" ? "#f59e0b" :
     "rgba(255,255,255,0.35)";
 
   return (

@@ -72,7 +72,7 @@ export function buildFacts(model: SessionModel): AnalysisFacts {
 
   return {
     schemaVersion: 1,
-    engine: "openf1ow-engine/1",
+    engine: "racevector-engine/1",
     session: {
       key: model.info.session_key, name: model.info.session_name, type: model.info.session_type,
       meeting: model.meeting?.meeting_name ?? null, circuit: model.info.circuit_short_name ?? model.meeting?.circuit_short_name ?? null,

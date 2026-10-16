@@ -6,15 +6,15 @@ const ABOUT_HTML = `<!doctype html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>About OpenF1ow — methodology, data sources, open source</title>
-<meta name="description" content="OpenF1ow is a free open-source Formula 1 telemetry analysis platform. Methodology: clean-lap median pace, fuel-corrected tyre degradation, dirty-air time loss, and AI-written race verdicts." />
-<link rel="canonical" href="https://www.openf1ow.com/about" />
+<title>About RaceVector — methodology, data sources, open source</title>
+<meta name="description" content="RaceVector is a free open-source Formula 1 telemetry analysis platform. Methodology: clean-lap median pace, fuel-corrected tyre degradation, dirty-air time loss, and AI-written race verdicts." />
+<link rel="canonical" href="https://www.racevector.com/about" />
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <meta property="og:type" content="website" />
-<meta property="og:url" content="https://www.openf1ow.com/about" />
-<meta property="og:title" content="About OpenF1ow" />
-<meta property="og:description" content="Methodology and data sources behind OpenF1ow's race analysis." />
-<meta property="og:site_name" content="OpenF1ow" />
+<meta property="og:url" content="https://www.racevector.com/about" />
+<meta property="og:title" content="About RaceVector" />
+<meta property="og:description" content="Methodology and data sources behind RaceVector's race analysis." />
+<meta property="og:site_name" content="RaceVector" />
 <style>
 :root { color-scheme: dark; }
 * { box-sizing: border-box; }
@@ -38,16 +38,16 @@ footer.site { margin-top: 60px; padding: 20px 0; border-top: 1px solid rgba(255,
 <body>
 <div class="wrap">
   <header class="site">
-    <a class="logo" href="/"><span style="opacity:0.6">open</span><span class="accent">f1</span><span style="opacity:0.6">ow</span></a>
+    <a class="logo" href="/"><span style="opacity:0.6">race</span><span class="accent">vector</span></a>
     <a href="/insights" style="font-size:13px;color:rgba(255,255,255,0.55);text-decoration:none">All recaps →</a>
   </header>
 
-  <h1>About OpenF1ow</h1>
+  <h1>About RaceVector</h1>
 
   <p class="lead">A free, open-source Formula 1 analysis platform. Per-race recaps, season trends, fuel-corrected tyre degradation, dirty-air time loss, and AI-written race verdicts. Built on the <a href="https://openf1.org" rel="noopener">OpenF1 API</a>.</p>
 
   <h2>What it does</h2>
-  <p>OpenF1ow turns raw F1 timing into the kind of analysis that until recently lived only on broadcast booths and team engineering screens. Every Grand Prix from 2023 onward gets:</p>
+  <p>RaceVector turns raw F1 timing into the kind of analysis that until recently lived only on broadcast booths and team engineering screens. Every Grand Prix from 2023 onward gets:</p>
   <ul>
     <li><strong>A race recap</strong> with classification, top race pace, biggest gainers, prose summary.</li>
     <li><strong>Full session analysis</strong> — race pace ranking, sector deltas, tyre degradation per stint, teammate gaps, dirty-air time loss, pit stop efficiency.</li>
@@ -77,11 +77,11 @@ footer.site { margin-top: 60px; padding: 20px 0; border-top: 1px solid rgba(255,
   <p>Every figure on the site &mdash; race page, recap, share card, home page &mdash; is produced by one open-source analytics engine (<code>src/engine</code>) run on the same session data, so the numbers agree everywhere. Each card has a &ldquo;How this is computed&rdquo; note with its method, sample and caveats.</p>
 
   <h2>Data sources</h2>
-  <p><strong>OpenF1.org</strong> — telemetry, lap timing, sectors, stints, pit stops, weather, race control, session results. Cached aggressively in Cloudflare R2 so most page loads serve from cache and the OpenF1 API isn't hit on the hot path.</p>
+  <p><strong>OpenF1.org</strong> — telemetry, lap timing, sectors, stints, pit stops, weather, race control, session results. Data is fetched from its public API with bounded isolate and Cloudflare edge caching; availability and upstream rate limits apply.</p>
   <p><strong>Groq</strong> — Llama 3.3 70B for the race verdicts. Streamed via a Cloudflare Worker so the API key never reaches the browser.</p>
 
   <h2>Open source</h2>
-  <p>Source code at <a href="https://github.com/vassilispapadop/openf1ow" rel="noopener">github.com/vassilispapadop/openf1ow</a>. MIT licensed. React 18, TypeScript, Vite 6, Cloudflare Workers + Pages, R2.</p>
+  <p>Source code at <a href="https://github.com/vassilispapadop/openf1ow" rel="noopener">github.com/vassilispapadop/openf1ow</a>. MIT licensed. React 18, TypeScript, Vite 6, and Cloudflare Workers static assets.</p>
 
   <h2>What it isn't</h2>
   <ul>

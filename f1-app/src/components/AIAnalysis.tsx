@@ -2,66 +2,9 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { useSessionModel } from "../lib/useSessionModel";
 import { buildFacts } from "../engine/index.ts";
 import { F, M, sty } from "../lib/styles";
-
-// Simple markdown-to-JSX renderer for headers, bold, lists
-function renderMarkdown(text: string) {
-  const lines = text.split("\n");
-  const elements: JSX.Element[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // Headers
-    if (line.startsWith("## ")) {
-      elements.push(
-        <h2 key={i} style={{
-          fontSize: 16, fontWeight: 800, color: "#e10600", fontFamily: F,
-          margin: "20px 0 8px", letterSpacing: "0.3px",
-          borderBottom: "1px solid rgba(225,6,0,0.2)", paddingBottom: 6,
-        }}>
-          {line.slice(3)}
-        </h2>
-      );
-    } else if (line.startsWith("# ")) {
-      elements.push(
-        <h1 key={i} style={{
-          fontSize: 18, fontWeight: 800, color: "#e8e8ec", fontFamily: F,
-          margin: "16px 0 10px",
-        }}>
-          {line.slice(2)}
-        </h1>
-      );
-    } else if (line.startsWith("- ") || line.startsWith("* ")) {
-      elements.push(
-        <div key={i} style={{ display: "flex", gap: 8, marginBottom: 4, lineHeight: 1.6 }}>
-          <span style={{ color: "#e10600", flexShrink: 0 }}>&#8226;</span>
-          <span>{renderInline(line.slice(2))}</span>
-        </div>
-      );
-    } else if (line.trim() === "") {
-      elements.push(<div key={i} style={{ height: 8 }} />);
-    } else {
-      elements.push(
-        <p key={i} style={{ margin: "4px 0", lineHeight: 1.7 }}>
-          {renderInline(line)}
-        </p>
-      );
-    }
-  }
-
-  return elements;
-}
-
-function renderInline(text: string) {
-  // Handle **bold**
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={i} style={{ color: "#e8e8ec", fontWeight: 700 }}>{part.slice(2, -2)}</strong>;
-    }
-    return <span key={i}>{part}</span>;
-  });
-}
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import RaceAgent from "./RaceAgent";
 
 interface AIAnalysisProps {
   allLaps: any[];
@@ -191,6 +134,7 @@ export default function AIAnalysis({ allLaps, raceMeta }: AIAnalysisProps) {
   if (!analysis && !loading && !error) {
     return (
       <div style={sty.card}>
+        <RaceAgent raceMeta={raceMeta} />
         <div style={{ textAlign: "center", padding: 30 }}>
           <div style={{
             width: 48, height: 48, margin: "0 auto 16px",
@@ -275,6 +219,7 @@ export default function AIAnalysis({ allLaps, raceMeta }: AIAnalysisProps) {
       {/* Content */}
       <div
         ref={contentRef}
+        className="ai-markdown"
         style={{
           fontSize: 13,
           color: "#c8c8d0",
@@ -285,23 +230,82 @@ export default function AIAnalysis({ allLaps, raceMeta }: AIAnalysisProps) {
           paddingRight: 8,
         }}
       >
-        {renderMarkdown(analysis)}
-        {loading && (
-          <span style={{
-            display: "inline-block",
-            width: 6, height: 14,
-            background: "#a855f7",
-            marginLeft: 2,
-            animation: "blink 0.8s step-end infinite",
-            verticalAlign: "text-bottom",
-          }} />
-        )}
+
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {analysis
+            .replace(/^[ \t]*\\\|/gm, "|")
+            .replace(/^[ \t]*\\---[ \t]*$/gm, "---")
+            .replace(/(\|[^\n]*\n)[ \t]*\n(?=[ \t]*\|)/g, "$1")}
+        </ReactMarkdown>
       </div>
 
       {/* Inline keyframes */}
       <style>{`
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+
+.ai-markdown h1 {
+  color: #e8e8ec;
+  font-size: 20px;
+  font-weight: 800;
+  margin: 16px 0 10px;
+}
+
+.ai-markdown h2 {
+  color: #e10600;
+  font-size: 16px;
+  font-weight: 800;
+  margin: 20px 0 8px;
+  border-bottom: 1px solid rgba(225, 6, 0, 0.2);
+  padding-bottom: 6px;
+}
+
+.ai-markdown p {
+  margin: 6px 0;
+  line-height: 1.7;
+}
+
+.ai-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0 18px;
+  font-size: 12px;
+}
+
+.ai-markdown th,
+.ai-markdown td {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.ai-markdown th {
+  background: rgba(225, 6, 0, 0.12);
+  color: #e8e8ec;
+}
+
+.ai-markdown strong {
+  color: #e8e8ec;
+  font-weight: 700;
+}
+
+.ai-markdown hr {
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  margin: 18px 0;
+}
+
+.ai-markdown ul,
+.ai-markdown ol {
+  padding-left: 22px;
+}
+
+.ai-markdown li {
+  margin-bottom: 5px;
+}
+
       `}</style>
     </div>
   );

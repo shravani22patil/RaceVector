@@ -26,7 +26,7 @@ import { TeammatesCard, OvertakesCard, SCImpactCard, DirtyAirCard } from "./comp
 import ConstructorsCard from "./components/insights/ConstructorsCard";
 import WhatIfCard from "./components/insights/WhatIfCard";
 import { StartCard, GridFinishCard } from "./components/insights/OverviewCards";
-import DriversCard from "./components/insights/DriversCard";
+import RaceInsightsDashboard from "./components/insights/RaceInsightsDashboard";
 
 export default function RaceAnalysis({ sessionKey, drivers, weather, raceControl = [], results = [], raceMeta, subTab, onSubTabChange }: {
   sessionKey: string;
@@ -64,11 +64,14 @@ export default function RaceAnalysis({ sessionKey, drivers, weather, raceControl
 
             {subTab === "overview" && (
               <>
-                <Verdicts onOpenTab={onSubTabChange} />
-                <DriversCard />
-                <StartCard />
-                <GridFinishCard />
-                <AIAnalysis key={sessionKey} allLaps={allLaps} drivers={drivers} stints={[]} pits={[]} weather={weather} raceControl={raceControl} results={results} raceMeta={raceMeta} />
+                <RaceInsightsDashboard onOpenTab={onSubTabChange} />
+                <Section title="Race evidence" hint="Detailed starting-position and grid-to-result tables." collapsible defaultOpen={false}>
+                  <StartCard />
+                  <GridFinishCard />
+                </Section>
+                <Section title="AI race analysis" collapsible defaultOpen={false}>
+                  <AIAnalysis key={sessionKey} allLaps={allLaps} drivers={drivers} stints={[]} pits={[]} weather={weather} raceControl={raceControl} results={results} raceMeta={raceMeta} />
+                </Section>
               </>
             )}
 

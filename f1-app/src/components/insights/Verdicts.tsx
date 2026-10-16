@@ -72,6 +72,11 @@ export default function Verdicts({ area, limit, onOpenTab }: { area?: VerdictAre
     if (onOpenTab) onOpenTab(v.evidence.tab as ViewKey);
     // Section flashes on #hash; set after the tab has mounted.
     setTimeout(() => {
+      let ancestor = document.getElementById(v.evidence.sectionId)?.parentElement;
+      while (ancestor) {
+        if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
+        ancestor = ancestor.parentElement;
+      }
       window.location.hash = v.evidence.sectionId;
       document.getElementById(v.evidence.sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 60);

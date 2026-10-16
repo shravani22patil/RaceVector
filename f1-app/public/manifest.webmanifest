@@ -1,6 +1,6 @@
 {
-  "name": "OpenF1ow — F1 Telemetry & Race Analysis",
-  "short_name": "OpenF1ow",
+  "name": "RaceVector — F1 Telemetry & Race Analysis",
+  "short_name": "RaceVector",
   "description": "Free F1 telemetry, lap times, tyre strategy and race analysis for every Grand Prix.",
   "start_url": "/",
   "scope": "/",

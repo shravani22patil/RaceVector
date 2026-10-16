@@ -170,13 +170,14 @@ export function downloadPng(blob: Blob, filename: string) {
  * return the public URL. Worker dedupes by SHA-256 — re-uploading an
  * identical chart is free and returns the same URL.
  */
-export async function uploadShareImage(blob: Blob): Promise<string | null> {
+export async function uploadShareImage(blob: Blob): Promise<string | "unavailable" | null> {
   try {
     const res = await fetch("/api/share/upload", {
       method: "POST",
       headers: { "Content-Type": "image/png" },
       body: blob,
     });
+    if (res.status === 503) return "unavailable";
     if (!res.ok) return null;
     const data = await res.json() as { url?: string };
     return data.url || null;

@@ -14,6 +14,7 @@ import { loadRaceIndex, findRace } from "./recap";
 import type { Driver } from "../lib/types";
 import { ft3 } from "../lib/format";
 import { computeInsights } from "./insights";
+import { resolveResource, type CacheEnv } from "./openf1-cache";
 
 interface PaceRow { driver: string; team: string; teamColour?: string; medianPace: string; gap: string; }
 
@@ -22,15 +23,12 @@ const H = 630;
 
 // ---------------------------------------------------------------------------
 // Font loading — cached in module scope so subsequent calls in a warm isolate
-// are free, and persisted to R2 so a cold isolate hits Google Fonts at most
-// once ever (rather than on every OG render). workers-og's loadGoogleFont
+// are free. workers-og's loadGoogleFont
 // fetches and parses the Google Fonts CSS to extract the .woff URL, then
 // returns the binary; that upstream call is what produced the /css2 504s.
 // ---------------------------------------------------------------------------
 
 let fontCache: { bold: ArrayBuffer; semibold: ArrayBuffer } | null = null;
-
-const FONT_KEYS = { bold: "fonts/inter-800.woff", semibold: "fonts/inter-600.woff" };
 
 /** Fetch from Google Fonts with a timeout so a slow/unavailable upstream
  * can't hang (or 504) the OG render — we fall back to the default font. */
@@ -43,40 +41,16 @@ async function loadGoogleFontTimed(weight: number): Promise<ArrayBuffer> {
   ]);
 }
 
-async function loadInter(
-  F1_DATA?: R2Bucket,
-): Promise<{ bold: ArrayBuffer; semibold: ArrayBuffer } | null> {
+async function loadInter(): Promise<{ bold: ArrayBuffer; semibold: ArrayBuffer } | null> {
   if (fontCache) return fontCache;
 
-  // 1. Serve from R2 if both weights were cached on a previous render.
-  if (F1_DATA) {
-    try {
-      const [b, s] = await Promise.all([
-        F1_DATA.get(FONT_KEYS.bold),
-        F1_DATA.get(FONT_KEYS.semibold),
-      ]);
-      if (b && s) {
-        fontCache = { bold: await b.arrayBuffer(), semibold: await s.arrayBuffer() };
-        return fontCache;
-      }
-    } catch {
-      /* fall through to Google Fonts */
-    }
-  }
-
-  // 2. Fetch from Google Fonts (with timeout), then persist to R2.
+  // Fetch from Google Fonts; the card renderer has a built-in default font fallback.
   try {
     const [bold, semibold] = await Promise.all([
       loadGoogleFontTimed(800),
       loadGoogleFontTimed(600),
     ]);
     fontCache = { bold, semibold };
-    if (F1_DATA) {
-      await Promise.all([
-        F1_DATA.put(FONT_KEYS.bold, bold),
-        F1_DATA.put(FONT_KEYS.semibold, semibold),
-      ]).catch(() => {});
-    }
     return fontCache;
   } catch {
     return null;
@@ -98,27 +72,15 @@ interface RaceData {
   topPace: PaceRow[];
 }
 
-async function r2Json<T>(F1_DATA: R2Bucket, key: string): Promise<T | null> {
-  try {
-    const obj = await F1_DATA.get(key);
-    if (!obj) return null;
-    return (await obj.json()) as T;
-  } catch { return null; }
-}
-
-async function fetchSession<T>(F1_DATA: R2Bucket, endpoint: string, sk: number): Promise<T | null> {
-  const r2 = await r2Json<T>(F1_DATA, `${endpoint}?session_key=${sk}`);
-  if (r2) return r2;
-  try {
-    const res = await fetch(`https://api.openf1.org/v1/${endpoint}?session_key=${sk}`);
-    if (!res.ok) return null;
-    return (await res.json()) as T;
-  } catch { return null; }
+async function fetchSession<T>(env: CacheEnv, endpoint: string, sk: number, origin: string): Promise<T | null> {
+  const result = await resolveResource(`/${endpoint}?session_key=${sk}`, env, null, origin);
+  if (result.status !== 200) return null;
+  try { return JSON.parse(result.body) as T; } catch { return null; }
 }
 
 async function loadRaceData(opts: {
   ASSETS: { fetch: (req: Request | string) => Promise<Response> };
-  F1_DATA: R2Bucket;
+  env: CacheEnv;
   origin: string;
   year: string;
   slug: string;
@@ -135,10 +97,10 @@ async function loadRaceData(opts: {
 
   if (raceSk) {
     const [drivers, results, insights] = await Promise.all([
-      fetchSession<Driver[]>(opts.F1_DATA, "drivers", raceSk),
-      fetchSession<{ position?: number; driver_number?: number }[]>(opts.F1_DATA, "session_result", raceSk),
+      fetchSession<Driver[]>(opts.env, "drivers", raceSk, opts.origin),
+      fetchSession<{ position?: number; driver_number?: number }[]>(opts.env, "session_result", raceSk, opts.origin),
       // The engine's race-pace table — identical to the analysis page.
-      computeInsights(raceSk, { F1_DATA: opts.F1_DATA }, opts.ctx ?? ({ waitUntil: () => {}, passThroughOnException: () => {}, props: {} } as unknown as ExecutionContext))
+      computeInsights(raceSk, opts.env, opts.ctx ?? ({ waitUntil: () => {}, passThroughOnException: () => {}, props: {} } as unknown as ExecutionContext), { origin: opts.origin })
         .then(r => (r.status === 200 ? (JSON.parse(r.body) as { tables?: { pace?: { driver: string; team: string; median: number; gap: number }[] } }).tables?.pace ?? [] : []))
         .catch(() => [] as { driver: string; team: string; median: number; gap: number }[]),
     ]);
@@ -214,9 +176,8 @@ function RaceCard({ data }: { data: RaceData }) {
       {/* Logo + tag */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "32px 60px 0" }}>
         <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em", display: "flex" }}>
-          <span style={{ color: "rgba(255,255,255,0.55)" }}>Open</span>
-          <span style={{ color: ACCENT }}>F1</span>
-          <span style={{ color: "rgba(255,255,255,0.55)" }}>ow</span>
+          <span style={{ color: "rgba(255,255,255,0.55)" }}>Race</span>
+          <span style={{ color: "rgba(255,255,255,0.55)" }}>Vector</span>
         </div>
         <div style={{ fontSize: 14, fontWeight: 600, color: "rgba(255,255,255,0.4)", letterSpacing: "0.1em", display: "flex" }}>
           RACE RECAP
@@ -346,7 +307,7 @@ function RaceCard({ data }: { data: RaceData }) {
           display: "flex",
         }}
       >
-        OPENF1OW.COM · OPEN-SOURCE F1 TELEMETRY
+        RACEVECTOR.COM · AI-POWERED RACE INTELLIGENCE
       </div>
 
       {/* Bottom accent bar */}
@@ -362,7 +323,7 @@ function RaceCard({ data }: { data: RaceData }) {
 export async function handleShareRaceRequest(opts: {
   url: URL;
   ASSETS: { fetch: (req: Request | string) => Promise<Response> };
-  F1_DATA: R2Bucket;
+  env: CacheEnv;
   ctx?: ExecutionContext;
 }): Promise<Response | null> {
   // Accept both /share/race/2024/imola and /share/race/2024/imola.png
@@ -372,7 +333,7 @@ export async function handleShareRaceRequest(opts: {
 
   const data = await loadRaceData({
     ASSETS: opts.ASSETS,
-    F1_DATA: opts.F1_DATA,
+    env: opts.env,
     origin: opts.url.origin,
     year,
     slug,
@@ -380,7 +341,7 @@ export async function handleShareRaceRequest(opts: {
   });
   if (!data) return new Response("Race not found", { status: 404 });
 
-  const fonts = await loadInter(opts.F1_DATA);
+  const fonts = await loadInter();
 
   return new ImageResponse(<RaceCard data={data} />, {
     width: W,
@@ -441,7 +402,7 @@ function compoundLetter(c: string): string {
 
 async function loadDriverData(opts: {
   ASSETS: { fetch: (req: Request | string) => Promise<Response> };
-  F1_DATA: R2Bucket;
+  env: CacheEnv;
   origin: string;
   year: string;
   slug: string;
@@ -456,10 +417,10 @@ async function loadDriverData(opts: {
   if (!raceSk) return null;
 
   const [drivers, laps, stints, results] = await Promise.all([
-    fetchSession<{ driver_number: number; name_acronym: string; full_name?: string; team_name?: string; team_colour?: string; headshot_url?: string }[]>(opts.F1_DATA, "drivers", raceSk),
-    fetchSession<{ driver_number: number; lap_number: number; lap_duration?: number | null; is_pit_out_lap?: boolean }[]>(opts.F1_DATA, "laps", raceSk),
-    fetchSession<{ driver_number: number; stint_number: number; compound: string; lap_start: number; lap_end: number }[]>(opts.F1_DATA, "stints", raceSk),
-    fetchSession<{ position?: number; driver_number?: number; gap_to_leader?: string | number; status?: string }[]>(opts.F1_DATA, "session_result", raceSk),
+    fetchSession<{ driver_number: number; name_acronym: string; full_name?: string; team_name?: string; team_colour?: string; headshot_url?: string }[]>(opts.env, "drivers", raceSk, opts.origin),
+    fetchSession<{ driver_number: number; lap_number: number; lap_duration?: number | null; is_pit_out_lap?: boolean }[]>(opts.env, "laps", raceSk, opts.origin),
+    fetchSession<{ driver_number: number; stint_number: number; compound: string; lap_start: number; lap_end: number }[]>(opts.env, "stints", raceSk, opts.origin),
+    fetchSession<{ position?: number; driver_number?: number; gap_to_leader?: string | number; status?: string }[]>(opts.env, "session_result", raceSk, opts.origin),
   ]);
 
   const driver = drivers?.find(d => d.driver_number === opts.driverNumber);
@@ -683,7 +644,7 @@ function DriverCard({ data }: { data: DriverData }) {
           display: "flex",
         }}
       >
-        OPENF1OW.COM · TELEMETRY · STRATEGY · AI ANALYSIS
+        RACEVECTOR.COM · TELEMETRY · STRATEGY · AI ANALYSIS
       </div>
 
       {/* Bottom accent bar */}
@@ -695,7 +656,7 @@ function DriverCard({ data }: { data: DriverData }) {
 export async function handleShareDriverRequest(opts: {
   url: URL;
   ASSETS: { fetch: (req: Request | string) => Promise<Response> };
-  F1_DATA: R2Bucket;
+  env: CacheEnv;
 }): Promise<Response | null> {
   // /share/driver/2024/imola/1.png  (or no .png)
   const m = opts.url.pathname.match(/^\/share\/driver\/(\d{4})\/([a-z0-9-]+)\/(\d{1,3})(?:\.png)?\/?$/);
@@ -704,7 +665,7 @@ export async function handleShareDriverRequest(opts: {
 
   const data = await loadDriverData({
     ASSETS: opts.ASSETS,
-    F1_DATA: opts.F1_DATA,
+    env: opts.env,
     origin: opts.url.origin,
     year,
     slug,
@@ -712,7 +673,7 @@ export async function handleShareDriverRequest(opts: {
   });
   if (!data) return new Response("Driver not found for this race", { status: 404 });
 
-  const fonts = await loadInter(opts.F1_DATA);
+  const fonts = await loadInter();
 
   return new ImageResponse(<DriverCard data={data} />, {
     width: W,

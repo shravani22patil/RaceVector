@@ -1,6 +1,5 @@
-import { handleF1Request, normalizeKey } from "./r2-cache";
+import { handleF1Request, resolveResource, type CacheEnv } from "./openf1-cache";
 import { handleAdminRequest } from "./admin";
-import { runScheduledTick } from "./cron";
 import { handleBundleRequest } from "./bundle";
 import { handleSessionInsightsRequest } from "./insights";
 import { handleRecapRequest, handleInsightsRequest, buildRaceContentBlock } from "./recap";
@@ -9,14 +8,14 @@ import { handleShareImageUpload, handleShareImageRead } from "./share-image";
 import { handleSeasonTrendsRequest } from "./season-trends";
 import { handleAboutRequest } from "./about";
 import { handleSlugRedirect } from "./slug-redirect";
+import { AGENT_TOOLS, executeAgentTool } from "./agent-tools";
 
-interface Env {
+interface Env extends CacheEnv {
   GROQ_API_KEY: string;
   GROQ_MODEL?: string;
   // Bearer secret for /api/admin/* (purge / refresh a session's cache).
   ADMIN_TOKEN?: string;
   ASSETS: { fetch: (req: Request | string) => Promise<Response> };
-  F1_DATA: R2Bucket;
   // Google Analytics 4 measurement ID (G-XXXXXXXXXX). Optional — when unset,
   // Worker-rendered pages skip the gtag snippet.
   GA_ID?: string;
@@ -35,36 +34,10 @@ interface Env {
 // DYNAMIC OG TAGS
 // ============================================================================
 
-const OPENF1_API = "https://api.openf1.org/v1";
-const metaCache = new Map<string, { data: any; ts: number }>();
-const META_TTL = 3600_000; // 1 hour
-
-async function fetchCached(path: string, r2?: R2Bucket): Promise<any> {
-  const cached = metaCache.get(path);
-  if (cached && Date.now() - cached.ts < META_TTL) return cached.data;
-  // Try R2 first (data may already be cached by the /api/f1 proxy). The proxy
-  // writes keys with query params sorted, so build the lookup the same way —
-  // "drivers?session_key=…&driver_number=…" never matched before this.
-  if (r2) {
-    try {
-      const key = normalizeKey(path);
-      const obj = await r2.get(key);
-      if (obj) {
-        const data = await obj.json();
-        metaCache.set(path, { data, ts: Date.now() });
-        return data;
-      }
-    } catch { /* fall through to API */ }
-  }
-  try {
-    const res = await fetch(OPENF1_API + path);
-    if (!res.ok) return null;
-    const data = await res.json();
-    metaCache.set(path, { data, ts: Date.now() });
-    return data;
-  } catch {
-    return null;
-  }
+async function fetchCached(path: string, env: CacheEnv, origin: string): Promise<any> {
+  const result = await resolveResource(path, env, null, origin);
+  if (result.status !== 200) return null;
+  try { return JSON.parse(result.body); } catch { return null; }
 }
 
 const SUB_TAB_LABELS: Record<string, string> = {
@@ -176,7 +149,7 @@ function injectJsonLd(html: string, blocks: Record<string, any>[]): string {
   return html.replace(/<\/head>/i, `    ${scripts}\n  </head>`);
 }
 
-async function buildOgTags(url: URL, r2?: R2Bucket): Promise<{ title: string; description: string; ogUrl: string; jsonLd: Record<string, any>[] } | null> {
+async function buildOgTags(url: URL, env: CacheEnv): Promise<{ title: string; description: string; ogUrl: string; jsonLd: Record<string, any>[] } | null> {
   // Support both new path-based URLs and legacy query-param URLs
   let mk: string | null, sk: string | null, dn: string | null, view: string | null, subTab: string | null;
   const pathParams = parsePathParams(url.pathname);
@@ -199,9 +172,9 @@ async function buildOgTags(url: URL, r2?: R2Bucket): Promise<{ title: string; de
 
   // Fetch all metadata in parallel — none depend on each other
   const [meetings, drivers, sessions] = await Promise.all([
-    fetchCached("/meetings?meeting_key=" + mk, r2),
-    dn && sk ? fetchCached("/drivers?session_key=" + sk + "&driver_number=" + dn, r2) : null,
-    sk ? fetchCached("/sessions?session_key=" + sk, r2) : null,
+    fetchCached("/meetings?meeting_key=" + mk, env, url.origin),
+    dn && sk ? fetchCached("/drivers?session_key=" + sk + "&driver_number=" + dn, env, url.origin) : null,
+    sk ? fetchCached("/sessions?session_key=" + sk, env, url.origin) : null,
   ]);
 
   const meeting = meetings?.[0];
@@ -224,8 +197,8 @@ async function buildOgTags(url: URL, r2?: R2Bucket): Promise<{ title: string; de
 
   parts.push(`${year} ${raceName}`);
 
-  const title = parts.join(" — ") + " | OpenF1ow";
-  const description = `F1 telemetry and race analysis for the ${year} ${raceName}. Lap times, sector splits, tire strategies, and more on OpenF1ow.`;
+  const title = parts.join(" — ") + " | RaceVector";
+  const description = `F1 telemetry and race analysis for the ${year} ${raceName}. Lap times, sector splits, tire strategies, and more on RaceVector.`;
   const ogUrl = url.origin + url.pathname + url.search;
 
   // Build the og:image URL the same way injectOgTags does, so JSON-LD `image` matches.
@@ -239,7 +212,7 @@ async function buildOgTags(url: URL, r2?: R2Bucket): Promise<{ title: string; de
 
   // Breadcrumbs help Google build rich navigation snippets.
   const crumbs: { name: string; url: string }[] = [
-    { name: "OpenF1ow", url: url.origin + "/" },
+    { name: "RaceVector", url: url.origin + "/" },
     { name: String(year), url: `${url.origin}/${year}` },
     { name: raceName, url: `${url.origin}/${year}/${mk}` },
   ];
@@ -329,7 +302,7 @@ function generateOgImageSvg(title: string, subtitle: string): string {
   <!-- Subtitle -->
   <text x="60" y="${H/2 + 50}" font-family="Inter,system-ui,sans-serif" font-size="24" font-weight="500" fill="rgba(255,255,255,0.4)">${esc(subtitle)}</text>
   <!-- URL -->
-  <text x="60" y="${H - 40}" font-family="monospace" font-size="16" fill="rgba(255,255,255,0.15)">openf1ow.com</text>
+  <text x="60" y="${H - 40}" font-family="monospace" font-size="16" fill="rgba(255,255,255,0.15)">RaceVector.com</text>
   <!-- Bottom red line -->
   <rect x="0" y="${H - 4}" width="${W}" height="4" fill="url(#red)"/>
 </svg>`;
@@ -340,7 +313,7 @@ function generateOgImageSvg(title: string, subtitle: string): string {
 // ============================================================================
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile";
+const DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b";
 
 const SYSTEM_PROMPT = `You are an expert Formula 1 race analyst and strategist — think Martin Brundle meets a data scientist. You produce broadcast-quality race summaries from telemetry-derived data.
 
@@ -418,25 +391,98 @@ function compactSummary(s: any): any {
   };
 }
 
+
+
+function compactRaceTables(tables: any): any {
+  if (!tables || typeof tables !== "object") return tables;
+
+  const capRows = (value: any, limit: number): any => {
+    if (Array.isArray(value)) return value.slice(0, limit);
+
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [
+          key,
+          Array.isArray(item) ? item.slice(0, limit) : item,
+        ]),
+      );
+    }
+
+    return value;
+  };
+
+  return roundNumbers({
+   results: capRows(tables.results, 10),
+   pace: capRows(tables.pace, 8),
+   truePace: capRows(tables.truePace, 8),
+   constructors: capRows(tables.constructors, 8),
+   teammates: capRows(tables.teammates, 6),
+   compounds: capRows(tables.compounds, 8),
+   pitStops: capRows(tables.pitStops, 8),
+   undercuts: capRows(tables.undercuts, 6),
+   start: capRows(tables.start, 8),
+   overtakes: capRows(tables.overtakes, 8),
+   topSpeeds: capRows(tables.topSpeeds, 6),
+   sectors: capRows(tables.sectors, 6),
+   weather: tables.weather,
+ });
+}
+
+
+
+
 function buildPrompt(payload: any): string {
   const meta = payload?.raceMeta;
   const header = meta
     ? `Race: ${meta.year ?? ""} ${meta.meetingName ?? ""}${meta.country ? " (" + meta.country + ")" : ""}${meta.sessionName ? " — " + meta.sessionName : ""}`.trim()
     : "";
+
   const body = { ...payload };
   delete body.raceMeta;
 
-  // Engine facts (schemaVersion 1): the verdicts are already computed with
-  // their confidence and sample — the narrative should lead with them and
-  // expand, not re-derive. Tables follow for supporting numbers.
+  console.log("AI prompt schema:", body.schemaVersion);
+  console.log("AI table keys:", Object.keys(body.tables ?? {}));
+  console.log(
+    "AI table JSON characters:",
+    JSON.stringify(body.tables ?? {}).length,
+  );
+
   if (body.schemaVersion === 1 && Array.isArray(body.verdicts)) {
     const verdicts = body.verdicts
       .filter((v: any) => v.id !== "data_quality")
-      .map((v: any) => `- [${v.confidence}] ${v.headline} ${v.detail} (${(v.numbers ?? []).map((n: any) => `${n.label}: ${n.value}`).join("; ")})`)
+      .map(
+        (v: any) =>
+          `- [${v.confidence}] ${v.headline} ${v.detail} (${(v.numbers ?? [])
+            .map((n: any) => `${n.label}: ${n.value}`)
+            .join("; ")})`,
+      )
       .join("\n");
-    const warnings = Array.isArray(body.warnings) && body.warnings.length ? `\n\nData notes: ${body.warnings.join(" ")}` : "";
-    return `Write the race analysis from the pre-computed findings and tables below. The findings come from a statistical engine (clean-lap filtering, fuel correction, fitted degradation, real timing gaps) — treat them as established facts, lead with the highest-impact ones, and cite their numbers. Do not invent figures that are not in the data.${header ? "\n\n" + header : ""}\n\n## Findings\n${verdicts}${warnings}\n\n## Tables\n${JSON.stringify(body.tables)}`;
+
+    const warnings =
+      Array.isArray(body.warnings) && body.warnings.length
+        ? `\n\nData notes: ${body.warnings.join(" ")}`
+        : "";
+
+    const compactTables = compactRaceTables(body.tables);
+
+    console.log(
+      "Compacted table JSON characters:",
+      JSON.stringify(compactTables ?? {}).length,
+    );
+
+    return `Write a detailed, evidence-based Formula 1 race report using the precomputed findings and tables below.
+            Preserve the six sections in the system instructions. Cite supplied numbers, compare pace with finishing position, and explain strategy only where supported by data.
+            Never invent missing figures. If evidence is incomplete, say so.
+            ${header ? "\n\n" + header : ""}
+
+           ## Findings
+           ${verdicts}${warnings}
+
+           ## Tables
+           ${JSON.stringify(compactTables)}`;
+
   }
+
   return `Analyze this Formula 1 race using the data below. The data has been pre-computed from telemetry — trust the numbers.${header ? "\n\n" + header : ""}\n\n${JSON.stringify(compactSummary(body))}`;
 }
 
@@ -452,20 +498,13 @@ const BOT_PROBE_RE =
   /(\.php($|[?/])|\/wp-(admin|includes|content|login)|xmlrpc|\/\.(env|git|aws|ssh)|\/vendor\/|\/phpmyadmin)/i;
 
 export default {
-  // Cron Trigger (wrangler.jsonc): one settled session per tick — warm its
-  // endpoints, derive the intervals window, store the engine's insights.
-  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    const report = await runScheduledTick(env, ctx);
-    console.log("cron", JSON.stringify(report));
-  },
-
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     // Drop automated vulnerability-scanner probes early — the app has no PHP,
     // WordPress, or dotfiles, so these are always malicious noise (they inflate
     // request counts and hit the SPA fallback). Blocking here short-circuits
-    // before any R2/upstream work. A zone WAF rule would block at the edge
+    // before any upstream work. A zone WAF rule would block at the edge
     // (cheaper still); this is the in-Worker equivalent when WAF isn't wired up.
     if (BOT_PROBE_RE.test(url.pathname)) {
       return new Response("Not found", { status: 403 });
@@ -477,13 +516,13 @@ export default {
 
     // OG image endpoint — returns SVG with race/driver branding
     if (url.pathname === "/og-image" && request.method === "GET") {
-      const og = await buildOgTags(url, env.F1_DATA);
+      const og = await buildOgTags(url, env);
       if (!og) {
         return new Response("Missing params", { status: 400 });
       }
       // Split title into main + context
-      const titleParts = og.title.replace(" | OpenF1ow", "").split(" — ");
-      const mainTitle = titleParts[0] || "OpenF1ow";
+      const titleParts = og.title.replace(" | RaceVector", "").split(" — ");
+      const mainTitle = titleParts[0] || "RaceVector";
       const subtitle = titleParts.slice(1).join(" — ");
       const svg = generateOgImageSvg(mainTitle, subtitle);
       return new Response(svg, {
@@ -494,7 +533,7 @@ export default {
       });
     }
 
-    // OpenF1 API proxy — serve from R2 cache (must be before OG/SPA handlers)
+    // OpenF1 API proxy — edge and bounded isolate cache (before OG/SPA handlers)
     if (url.pathname.startsWith("/api/f1/")) {
       return handleF1Request(request, env, ctx);
     }
@@ -505,19 +544,19 @@ export default {
     }
     // Operator endpoints (bearer secret; 404 when unauthorised).
     if (url.pathname.startsWith("/api/admin/")) {
-      const r = await handleAdminRequest(request, env, ctx);
+      const r = await handleAdminRequest(request, env);
       if (r) return r;
     }
 
     // Season trends artifact — precomputed by scripts/compute-season-trends.mjs
     if (url.pathname.startsWith("/api/season-trends/")) {
-      const r = await handleSeasonTrendsRequest({ url, F1_DATA: env.F1_DATA });
+      const r = await handleSeasonTrendsRequest({ url });
       if (r) return r;
     }
 
     // Worker-rendered SEO pages: /recap/:year/:slug and /insights[/:year]
     if (url.pathname.startsWith("/recap/") && env.ASSETS) {
-      const r = await handleRecapRequest({ url, ASSETS: env.ASSETS, F1_DATA: env.F1_DATA, gaId: env.GA_ID, ctx });
+      const r = await handleRecapRequest({ url, ASSETS: env.ASSETS, env, gaId: env.GA_ID, ctx });
       if (r) return r;
     }
     if ((url.pathname === "/insights" || url.pathname.startsWith("/insights/")) && env.ASSETS) {
@@ -538,20 +577,20 @@ export default {
     }
     // PNG share cards for race recaps (Twitter/Slack/Discord preview)
     if (url.pathname.startsWith("/share/race/") && env.ASSETS) {
-      const r = await handleShareRaceRequest({ url, ASSETS: env.ASSETS, F1_DATA: env.F1_DATA, ctx });
+      const r = await handleShareRaceRequest({ url, ASSETS: env.ASSETS, env, ctx });
       if (r) return r;
     }
     if (url.pathname.startsWith("/share/driver/") && env.ASSETS) {
-      const r = await handleShareDriverRequest({ url, ASSETS: env.ASSETS, F1_DATA: env.F1_DATA });
+      const r = await handleShareDriverRequest({ url, ASSETS: env.ASSETS, env });
       if (r) return r;
     }
     // User-uploaded chart screenshots: read by hash, upload via POST.
     if (url.pathname.startsWith("/share/img/")) {
-      const r = await handleShareImageRead({ url, F1_DATA: env.F1_DATA });
+      const r = await handleShareImageRead({ url });
       if (r) return r;
     }
     if (url.pathname === "/api/share/upload") {
-      return handleShareImageUpload({ request, F1_DATA: env.F1_DATA });
+      return handleShareImageUpload({ request });
     }
 
     // Helper: fetch index.html from assets
@@ -573,7 +612,7 @@ export default {
         const assetRes = env.ASSETS ? await fetchIndexHtml() : null;
         if (assetRes) {
           let html = await assetRes.text();
-          const og = await buildOgTags(url, env.F1_DATA);
+          const og = await buildOgTags(url, env);
           if (og) {
             html = injectOgTags(html, og);
             html = injectJsonLd(html, og.jsonLd);
@@ -584,7 +623,7 @@ export default {
             try {
               const block = await buildRaceContentBlock({
                 ASSETS: env.ASSETS,
-                F1_DATA: env.F1_DATA,
+                env,
                 origin: url.origin,
                 year: ogParams.year,
                 meetingKey: Number(ogParams.mk),
@@ -615,7 +654,7 @@ export default {
       }
     }
 
-    if (url.pathname !== "/api/analyze") {
+    if (url.pathname !== "/api/analyze" && url.pathname !== "/api/agent") {
       // Delegate non-Worker routes (static assets + SPA fallback) to ASSETS.
       // The asset binding's `not_found_handling: single-page-application` will
       // serve index.html for any unmatched path.
@@ -645,6 +684,171 @@ export default {
       return new Response("Invalid JSON body", { status: 400, headers: CORS_HEADERS });
     }
 
+
+    if (url.pathname === "/api/agent") {
+      if (request.method !== "POST") {
+        return Response.json({ error: "Method not allowed" }, {
+          status: 405,
+          headers: CORS_HEADERS,
+        });
+      }
+
+      const question =
+        typeof body?.question === "string" ? body.question.trim().slice(0, 800) : "";
+      const facts = body?.facts;
+      const tables = facts?.tables;
+
+      if (!question || !tables || typeof tables !== "object") {
+        return Response.json(
+          { error: "A question and session race facts are required." },
+          { status: 400, headers: CORS_HEADERS },
+        );
+      }
+
+      const messages: any[] = [
+        {
+          role: "system",
+          content:
+            "You are RaceVector, an evidence-based Formula 1 race engineer. " +
+            "Use the available tools to inspect session facts before answering. " +
+            "Only make claims supported by the supplied data. If data is missing, say so. " +
+            "Explain comparisons clearly and distinguish measured facts from interpretation. " +
+            "Do not claim to have run calculations that you did not perform. " +
+            "Keep the final answer concise and useful.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            question,
+            raceMeta: body?.raceMeta ?? null,
+            session: facts.session ?? null,
+            coverage: facts.coverage ?? null,
+            warnings: facts.warnings ?? [],
+          }),
+        },
+      ];
+
+      const toolsUsed: string[] = [];
+
+      try {
+        for (let round = 0; round < 6; round++) {
+          const groqRes = await fetch(GROQ_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${env.GROQ_API_KEY}`,
+            },
+            body: JSON.stringify({
+              model: env.GROQ_MODEL || DEFAULT_GROQ_MODEL,
+              messages,
+              tools: AGENT_TOOLS,
+              tool_choice: "auto",
+              temperature: 0.2,
+              max_tokens: 1200,
+              stream: false,
+            }),
+          });
+
+          if (!groqRes.ok) {
+            const detail = (await groqRes.text()).slice(0, 1000);
+            console.error("RaceVector agent Groq error:", groqRes.status, detail);
+            return Response.json(
+              { error: `Agent model request failed (${groqRes.status}). Please try again.` },
+              { status: 502, headers: CORS_HEADERS },
+            );
+          }
+
+          const result: any = await groqRes.json();
+          const message = result?.choices?.[0]?.message;
+
+          if (!message) {
+            return Response.json(
+              { error: "The agent model returned an empty response." },
+              { status: 502, headers: CORS_HEADERS },
+            );
+          }
+
+          messages.push(message);
+
+          const calls = message.tool_calls ?? [];
+           if (round === 5 && calls.length > 0) {
+             messages.push({
+             role: "assistant",
+             content: "Summarize the evidence already collected and answer the user's question now. Do not call any more tools.",
+          });
+           const finalRes = await fetch(GROQ_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+             Authorization: `Bearer ${env.GROQ_API_KEY}`,
+           },
+             body: JSON.stringify({
+             model: env.GROQ_MODEL || DEFAULT_GROQ_MODEL,
+             messages,
+             temperature: 0.2,
+             max_tokens: 1200,
+             stream: false,
+          }),
+        });
+
+       if (!finalRes.ok) {
+          return Response.json(
+           { error: "The agent could not produce its final answer." },
+           { status: 502, headers: CORS_HEADERS },
+          );
+        }
+
+       const finalData: any = await finalRes.json();
+       const finalMessage = finalData?.choices?.[0]?.message?.content;
+
+       return Response.json({
+        answer: typeof finalMessage === "string" ? finalMessage : "No final answer was returned.",
+        toolsUsed: [...new Set(toolsUsed)],
+       }, { headers: { ...CORS_HEADERS, "Content-Type": "application/json" } });
+       }
+           if (calls.length === 0) {
+            return Response.json(
+              {
+                answer:
+                  typeof message.content === "string" && message.content.trim()
+                    ? message.content
+                    : "I couldn't produce an answer from the available session data.",
+                toolsUsed: [...new Set(toolsUsed)],
+              },
+              { headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
+            );
+          }
+
+          for (const call of calls.slice(0, 4)) {
+            const name = call.function?.name;
+            toolsUsed.push(name || "unknown_tool");
+
+            const output = executeAgentTool(name, call.function?.arguments, tables);
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: output,
+            });
+          }
+        }
+
+        return Response.json(
+          {
+            error: "The agent reached its tool-call limit. Please ask a more specific question.",
+            toolsUsed: [...new Set(toolsUsed)],
+          },
+          { status: 502, headers: CORS_HEADERS },
+        );
+      } catch (error) {
+        console.error("RaceVector agent error:", error);
+        return Response.json(
+          { error: "The agent encountered a server error. Please try again." },
+          { status: 500, headers: CORS_HEADERS },
+        );
+      }
+    }
+
+
     const groqBody = {
       model: env.GROQ_MODEL || DEFAULT_GROQ_MODEL,
       messages: [
@@ -652,9 +856,10 @@ export default {
         { role: "user", content: buildPrompt(body) },
       ],
       temperature: 0.3,
-      max_tokens: 8192,
+      max_tokens: 1800,
       stream: true,
     };
+
 
     const groqRes = await fetch(GROQ_URL, {
       method: "POST",
@@ -685,7 +890,11 @@ export default {
       if (!data || data === "[DONE]") return;
       try {
         const parsed = JSON.parse(data);
-        const text = parsed?.choices?.[0]?.delta?.content;
+        const choice = parsed?.choices?.[0];
+        const text = choice?.delta?.content;
+        if (choice?.finish_reason) {
+          console.log("Groq finish reason:", choice.finish_reason);
+        }
         if (text) {
           await writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
         }
@@ -733,3 +942,19 @@ export default {
     });
   },
 };
+function roundNumbers(arg0: { results: any; pace: any; truePace: any; constructors: any; teammates: any; compounds: any; pitStops: any; undercuts: any; start: any; overtakes: any; topSpeeds: any; sectors: any; weather: any; }): any {
+  const roundValue = (value: any): any => {
+    if (typeof value === "number") {
+      return Number.isFinite(value) ? Math.round(value * 1000) / 1000 : value;
+    }
+    if (Array.isArray(value)) return value.map(roundValue);
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value).map(([key, nested]) => [key, roundValue(nested)]),
+      );
+    }
+    return value;
+  };
+
+  return roundValue(arg0);
+}

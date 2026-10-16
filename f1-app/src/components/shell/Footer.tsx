@@ -17,8 +17,7 @@ export default function Footer() {
       flexWrap: "wrap",
     }}>
       <span>
-        <span style={{ color: C.textDim }}>openf1</span>
-        <span style={{ color: C.accent }}>ow</span>
+        <span style={{ color: C.textDim }}>racevector</span>
         <span style={{ marginLeft: 10, color: C.textFaint }}>not affiliated with Formula 1</span>
       </span>
       <span style={{ color: C.textFaint, display: "inline-flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>

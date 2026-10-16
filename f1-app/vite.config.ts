@@ -18,7 +18,8 @@ export default defineConfig({
         const isApi = url.startsWith('/api/');
         const isViteInternal = url.startsWith('/@') || url.startsWith('/__') || url.startsWith('/node_modules');
         const isFile = url.includes('.');
-        if (!isApi && !isViteInternal && !isFile && url !== '/') {
+        const isWorkerRendered = /^\/(?:recap\/|insights(?:\/|$)|about\/?$)/.test(url);
+        if (!isApi && !isViteInternal && !isFile && !isWorkerRendered && url !== '/') {
           req.url = '/';
         }
         next();

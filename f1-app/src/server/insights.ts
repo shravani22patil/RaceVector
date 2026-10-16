@@ -1,48 +1,35 @@
 // GET /api/session/:sk/insights — the engine run server-side on the same
-// bundle the client uses: verdicts plus compact facts. Persisted per session
-// once it has settled (versioned by engine schema), so the home page, the
-// recap and the OG cards quote exactly what the analysis page shows, and a
-// finished race's first paint is one small GET.
+// bundle the client uses: verdicts plus compact facts. Results are cached at
+// the edge and in a bounded isolate cache; there is no persistent artifact store.
 
-import type { CacheEnv } from "./r2-cache";
+import type { CacheEnv } from "./openf1-cache";
 import { assembleBundle, edgeForState } from "./bundle";
+import type { SessionState } from "./session-state";
 import { inputsFromBundle } from "../engine/bundle.ts";
 import { buildSessionModel } from "../engine/session/build.ts";
 import { buildFacts, type AnalysisFacts } from "../engine/summary/facts.ts";
 
 const VERSION = 1;
+const INSIGHTS_CACHE_TTL = 5 * 60_000;
+const MAX_INSIGHTS_CACHE = 32;
+const insightsCache = new Map<number, { body: string; state: SessionState; at: number }>();
 
 export interface InsightsPayload extends AnalysisFacts {
   meta: { sessionKey: number; state: string; generatedAt: string; version: number; missing: string[] };
 }
 
-/** The state recorded in a stored payload's meta, without parsing the whole
- *  thing: it sits in the trailing meta object. */
-function storedState(body: string): string | null {
-  const m = /"meta":\{[^{}]*"state":"(recent|settled|live|upcoming|unknown)"/.exec(body.slice(-600));
-  return m ? m[1] : null;
-}
-
-/** `force` skips the stored artifact and recomputes: the cron's second pass,
- *  48 h after a session, uses it to replace what the first pass stored while
- *  the session was still "recent" (late laps, penalties, corrected results). */
-export async function computeInsights(sk: number, env: CacheEnv, ctx: ExecutionContext, opts: { force?: boolean } = {}): Promise<{ status: number; body: string; state: string; cached: boolean }> {
-  const key = `insights/${sk}.v${VERSION}.json`;
+export async function computeInsights(sk: number, env: CacheEnv, ctx: ExecutionContext, opts: { force?: boolean; origin?: string } = {}): Promise<{ status: number; body: string; state: SessionState; cached: boolean }> {
   if (!opts.force) {
-    try {
-      const obj = await env.F1_DATA.get(key);
-      // The state it was computed in is in the payload's meta (and, for
-      // Worker-written objects, in the object metadata too), so a recent
-      // artifact is served with a recent edge TTL and the client doesn't pin
-      // it. Objects from before the state was recorded are settled.
-      if (obj) {
-        const body = await obj.text();
-        return { status: 200, body, state: obj.customMetadata?.state ?? storedState(body) ?? "settled", cached: true };
-      }
-    } catch { /* compute */ }
+    const cached = insightsCache.get(sk);
+    if (cached && Date.now() - cached.at < INSIGHTS_CACHE_TTL) {
+      insightsCache.delete(sk);
+      insightsCache.set(sk, cached);
+      return { status: 200, body: cached.body, state: cached.state, cached: true };
+    }
+    if (cached) insightsCache.delete(sk);
   }
 
-  const a = await assembleBundle(sk, env, ctx);
+  const a = await assembleBundle(sk, env, ctx, opts.origin);
   if (!a.ok) return { status: a.status, body: a.body, state: "unknown", cached: false };
   // One parse of the spliced bundle; the engine runs on it here, server-side.
   const model = buildSessionModel(inputsFromBundle(JSON.parse(a.body)));
@@ -52,15 +39,12 @@ export async function computeInsights(sk: number, env: CacheEnv, ctx: ExecutionC
     meta: { sessionKey: sk, state: a.state, generatedAt: new Date().toISOString(), version: VERSION, missing: a.meta.missing },
   };
   const body = JSON.stringify(payload);
-  // Store it for recent sessions too, not only settled ones. The engine run
-  // is far beyond what a request may spend on the Free plan (error 1102), so
-  // an unstored artifact means 48 h of 503s for the home page's latest-race
-  // card after every race. The cron's second pass recomputes it with force.
-  if ((a.state === "settled" || a.state === "recent") && !a.meta.partial) {
-    ctx.waitUntil(env.F1_DATA.put(key, body, {
-      httpMetadata: { contentType: "application/json" },
-      customMetadata: { fetchedAt: String(Date.now()), state: a.state },
-    }));
+  if (body.length < 1_000_000) {
+    if (insightsCache.size >= MAX_INSIGHTS_CACHE) {
+      const oldest = insightsCache.keys().next().value;
+      if (oldest !== undefined) insightsCache.delete(oldest);
+    }
+    insightsCache.set(sk, { body, state: a.state, at: Date.now() });
   }
   return { status: 200, body, state: a.state, cached: false };
 }
@@ -69,13 +53,23 @@ export async function handleSessionInsightsRequest(request: Request, env: CacheE
   const url = new URL(request.url);
   const m = url.pathname.match(/^\/api\/session\/(\d+)\/insights\/?$/);
   if (!m) return null;
+  const cache = caches.default;
+  const cacheKey = new Request(url.origin + url.pathname);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
   const sk = Number(m[1]);
-  const r = await computeInsights(sk, env, ctx);
+  const r = await computeInsights(sk, env, ctx, { origin: url.origin });
   const headers: Record<string, string> = { "Content-Type": "application/json", "X-Cache": r.cached ? "HIT" : "MISS", "X-Session-State": r.state };
   if (r.status !== 200) {
     if (r.status === 429) headers["Retry-After"] = "12";
     return new Response(r.body, { status: r.status, headers });
   }
-  headers["Cache-Control"] = `public, max-age=60, s-maxage=${edgeForState(r.state as any, false)}`;
-  return new Response(r.body, { status: 200, headers });
+  headers["Cache-Control"] = `public, max-age=60, s-maxage=${Math.min(edgeForState(r.state, false), 300)}`;
+  const response = new Response(r.body, { status: 200, headers });
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+}
+
+export function resetInsightsCacheForTests(): void {
+  insightsCache.clear();
 }

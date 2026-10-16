@@ -49,34 +49,15 @@ export function findRace(idx: RaceIndex, year: string, slug: string): RaceIndexE
 }
 
 // ---------------------------------------------------------------------------
-// Data fetch from R2 — keyed identically to r2-cache.ts
+// Data fetch through the bounded OpenF1 read-through cache
 // ---------------------------------------------------------------------------
 
-async function r2Json<T>(F1_DATA: R2Bucket, key: string): Promise<T | null> {
-  try {
-    const obj = await F1_DATA.get(key);
-    if (!obj) return null;
-    return (await obj.json()) as T;
-  } catch {
-    return null;
-  }
-}
+import { resolveResource, type CacheEnv } from "./openf1-cache";
 
-async function fetchOpenF1<T>(path: string): Promise<T | null> {
-  try {
-    const res = await fetch("https://api.openf1.org/v1" + path);
-    if (!res.ok) return null;
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  }
-}
-
-// Try R2 first, fall back to OpenF1 API. Caches absent in R2 are not populated
-// here — the next /api/f1 hit will populate them through the regular cache.
-async function getSessionData<T>(F1_DATA: R2Bucket, endpoint: string, sessionKey: number): Promise<T | null> {
-  const key = `${endpoint}?session_key=${sessionKey}`;
-  return (await r2Json<T>(F1_DATA, key)) ?? (await fetchOpenF1<T>(`/${endpoint}?session_key=${sessionKey}`));
+async function getSessionData<T>(env: CacheEnv, endpoint: string, sessionKey: number, origin: string): Promise<T | null> {
+  const r = await resolveResource(`/${endpoint}?session_key=${sessionKey}`, env, null, origin);
+  if (r.status !== 200) return null;
+  try { return JSON.parse(r.body) as T; } catch { return null; }
 }
 
 // ---------------------------------------------------------------------------
@@ -97,9 +78,9 @@ interface InsightsPaceRow { rank: number; driver: string; team: string; median: 
 interface InsightsResultRow { pos: number | null; driver: string; team: string; grid: number | null; status: string }
 interface InsightsTables { pace?: InsightsPaceRow[]; results?: InsightsResultRow[] }
 
-async function loadInsightsTables(F1_DATA: R2Bucket, sk: number, ctx: ExecutionContext | undefined): Promise<InsightsTables> {
+async function loadInsightsTables(env: CacheEnv, sk: number, ctx: ExecutionContext | undefined, origin: string): Promise<InsightsTables> {
   try {
-    const r = await computeInsights(sk, { F1_DATA }, ctx ?? { waitUntil: () => {}, passThroughOnException: () => {}, props: {} } as unknown as ExecutionContext);
+    const r = await computeInsights(sk, env, ctx ?? { waitUntil: () => {}, passThroughOnException: () => {}, props: {} } as unknown as ExecutionContext, { origin });
     if (r.status !== 200) return {};
     return (JSON.parse(r.body) as { tables?: InsightsTables }).tables ?? {};
   } catch { return {}; }
@@ -236,11 +217,10 @@ function buildSummaryProse(d: RecapData): string {
 // which is otherwise an empty SPA shell. Gives search engines and LLMs a real
 // headline (winner + podium) plus internal links to the recap and analysis
 // views. React replaces this markup on mount, so users see it only as a brief
-// content-rich loading state. Cheap by design: race-index (cached) + two R2
-// reads (results, drivers) — no laps/pace computation.
+// content-rich loading state. It fetches only results and driver feeds.
 export async function buildRaceContentBlock(opts: {
   ASSETS: { fetch: (req: Request | string) => Promise<Response> };
-  F1_DATA: R2Bucket;
+  env: CacheEnv;
   origin: string;
   year: string;
   meetingKey: number;
@@ -255,8 +235,8 @@ export async function buildRaceContentBlock(opts: {
 
   if (raceSk) {
     const [results, drivers] = await Promise.all([
-      getSessionData<SessionResult[]>(opts.F1_DATA, "session_result", raceSk),
-      getSessionData<Driver[]>(opts.F1_DATA, "drivers", raceSk),
+      getSessionData<SessionResult[]>(opts.env, "session_result", raceSk, opts.origin),
+      getSessionData<Driver[]>(opts.env, "drivers", raceSk, opts.origin),
     ]);
     if (results && drivers) {
       const drvByNum: Record<number, Driver> = {};
@@ -323,10 +303,10 @@ export function renderRecapHtml(d: RecapData, origin: string, gaId?: string): st
   const slug = race.slug;
   const canonical = `${origin}/recap/${year}/${slug}`;
   const ogImage = `${origin}/share/race/${year}/${slug}.png`;
-  const title = `${year} ${race.meetingName} — Race Recap | OpenF1ow`;
+  const title = `${year} ${race.meetingName} — Race Recap | RaceVector`;
   const description = d.hasRaceData
     ? `${year} ${race.meetingName} race recap: top pace, biggest gainers, and full classification at ${race.circuit}.`
-    : `${year} ${race.meetingName} preview at ${race.circuit}, ${race.country}. Telemetry and analysis on OpenF1ow.`;
+    : `${year} ${race.meetingName} preview at ${race.circuit}, ${race.country}. Telemetry and analysis on RaceVector.`;
 
   const drvByNum: Record<number, Driver> = {};
   d.drivers.forEach(dr => { drvByNum[dr.driver_number] = dr; });
@@ -369,7 +349,7 @@ export function renderRecapHtml(d: RecapData, origin: string, gaId?: string): st
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
     itemListElement: [
-      { "@type": "ListItem", position: 1, name: "OpenF1ow", item: origin + "/" },
+      { "@type": "ListItem", position: 1, name: "RaceVector", item: origin + "/" },
       { "@type": "ListItem", position: 2, name: "Insights", item: origin + "/insights" },
       { "@type": "ListItem", position: 3, name: `${year} season`, item: `${origin}/insights/${year}` },
       { "@type": "ListItem", position: 4, name: race.meetingName, item: canonical },
@@ -486,7 +466,7 @@ footer.site a { color: rgba(255,255,255,0.5); }
 <body>
 <div class="wrap">
   <header class="site">
-    <a class="logo" href="/"><span style="opacity:0.6">Open</span><span class="accent">F1</span><span style="opacity:0.6">ow</span></a>
+    <a class="logo" href="/"><span style="opacity:0.6">Race</span><span class="accent">Vector</span></a>
     <a href="/insights" style="font-size:13px;color:rgba(255,255,255,0.55)">All recaps →</a>
   </header>
 
@@ -561,11 +541,11 @@ footer.site a { color: rgba(255,255,255,0.5); }
 export async function handleRecapRequest(opts: {
   url: URL;
   ASSETS: { fetch: (req: Request | string) => Promise<Response> };
-  F1_DATA: R2Bucket;
+  env: CacheEnv;
   gaId?: string;
   ctx?: ExecutionContext;
 }): Promise<Response | null> {
-  const { url, ASSETS, F1_DATA, gaId, ctx } = opts;
+  const { url, ASSETS, env, gaId, ctx } = opts;
   // /recap/2026/imola
   const m = url.pathname.match(/^\/recap\/(\d{4})\/([a-z0-9-]+)\/?$/);
   if (!m) return null;
@@ -583,9 +563,9 @@ export async function handleRecapRequest(opts: {
 
   if (raceSk) {
     const [d, r, t] = await Promise.all([
-      getSessionData<Driver[]>(F1_DATA, "drivers", raceSk),
-      getSessionData<SessionResult[]>(F1_DATA, "session_result", raceSk),
-      loadInsightsTables(F1_DATA, raceSk, ctx),
+      getSessionData<Driver[]>(env, "drivers", raceSk, url.origin),
+      getSessionData<SessionResult[]>(env, "session_result", raceSk, url.origin),
+      loadInsightsTables(env, raceSk, ctx, url.origin),
     ]);
     drivers = d ?? [];
     results = r ?? [];
@@ -658,11 +638,11 @@ export async function handleInsightsRequest(opts: {
   }).join("");
 
   const title = yearFilter
-    ? `${yearFilter} F1 season — Race recaps & analysis | OpenF1ow`
-    : `Race recaps & insights — every Grand Prix | OpenF1ow`;
+    ? `${yearFilter} F1 season — Race recaps & analysis | RaceVector`
+    : `Race recaps & insights — every Grand Prix | RaceVector`;
   const description = yearFilter
-    ? `${yearFilter} Formula 1 season: every Grand Prix, full classification, race pace, and telemetry analysis on OpenF1ow.`
-    : `Browse every F1 Grand Prix recap and analysis on OpenF1ow — race pace, tyre strategy, and telemetry, by season.`;
+    ? `${yearFilter} Formula 1 season: every Grand Prix, full classification, race pace, and telemetry analysis on RaceVector.`
+    : `Browse every F1 Grand Prix recap and analysis on RaceVector — race pace, tyre strategy, and telemetry, by season.`;
   const canonical = yearFilter ? `${url.origin}/insights/${yearFilter}` : `${url.origin}/insights`;
 
   const total = Object.values(idx.byYear).reduce((n, arr) => n + arr.length, 0);
@@ -681,7 +661,7 @@ export async function handleInsightsRequest(opts: {
 <meta property="og:title" content="${escHtml(title)}" />
 <meta property="og:description" content="${escHtml(description)}" />
 <meta property="og:image" content="${url.origin}/og-image" />
-<meta property="og:site_name" content="OpenF1ow" />
+<meta property="og:site_name" content="RaceVector" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="${escHtml(title)}" />
 <meta name="twitter:description" content="${escHtml(description)}" />
@@ -712,7 +692,7 @@ footer.site { margin-top: 60px; padding: 24px 0; border-top: 1px solid rgba(255,
 <body>
 <div class="wrap">
   <header class="site">
-    <a class="logo" href="/"><span style="opacity:0.6">Open</span><span class="accent">F1</span><span style="opacity:0.6">ow</span></a>
+    <a class="logo" href="/"><span style="opacity:0.6">Race</span><span class="accent">Vector</span></a>
     <a href="/" style="font-size:13px;color:rgba(255,255,255,0.55)">Live dashboard →</a>
   </header>
 

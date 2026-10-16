@@ -12,9 +12,10 @@
     "typecheck:ratchet": "node scripts/tsc-ratchet.mjs",
     "engine:check": "node --input-type=module -e \"await import('./src/engine/index.ts'); await import('./src/engine/telemetry/clipping.ts'); await import('./src/engine/telemetry/lapSegments.ts'); await import('./src/engine/telemetry/compare.ts'); await import('./src/lib/seasonUtils.ts')\"",
     "test": "vitest run",
+    "test:agent-eval": "vitest run src/server/__tests__/agent-evaluation.test.ts",
     "test:watch": "vitest",
     "shots": "node scripts/screens.mjs",
-    "build": "npm run typecheck:ratchet && npm run engine:check && node scripts/gen-sitemap.mjs && vite build",
+    "build": "npm run typecheck:ratchet && npm run engine:check && node scripts/gen-sitemap.mjs && vite build && node scripts/clean-worker-dev-vars.mjs",
     "build:full": "node scripts/gen-race-index.mjs && npm run build",
     "preview": "npm run build && wrangler dev",
     "deploy": "npm run build && wrangler deploy",
@@ -24,10 +25,15 @@
     "insights": "node scripts/compute-insights.mjs"
   },
   "dependencies": {
+    "d3-array": "^3.2.4",
+    "d3-scale": "^4.0.2",
+    "d3-shape": "^3.2.0",
     "html-to-image": "^1.11.13",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
     "react-router-dom": "^7.14.0",
+    "remark-gfm": "^4.0.1",
     "workers-og": "^0.0.27"
   },
   "devDependencies": {
@@ -36,6 +42,9 @@
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",
+    "@types/d3-array": "^3.2.2",
+    "@types/d3-scale": "^4.0.9",
+    "@types/d3-shape": "^3.2.0",
     "@types/node": "^26.5.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

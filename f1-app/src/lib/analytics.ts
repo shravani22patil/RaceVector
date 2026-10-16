@@ -14,7 +14,7 @@ declare global {
   }
 }
 
-// Fallback: production OpenF1ow GA4 property. Override with VITE_GA_ID for
+// Fallback: production RaceVector GA4 property. Override with VITE_GA_ID for
 // staging or local testing.
 const GA_ID: string = import.meta.env.VITE_GA_ID || "G-W8MHMCEZRQ";
 

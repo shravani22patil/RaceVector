@@ -10,7 +10,7 @@ import { fmt } from "../../charts/core/scales";
 import { C } from "../../lib/styles";
 import { useSelection } from "../../contexts/SelectionContext";
 
-export default function TruePaceCard() {
+export default function TruePaceCard({ compact = false }: { compact?: boolean }) {
   const { model } = useSessionModel();
   const sel = useSelection();
   const [mode, setMode] = useState<"raw" | "true">("raw");
@@ -45,16 +45,19 @@ export default function TruePaceCard() {
     <Section
       id={SECTION_IDS.truePace}
       title="Race pace"
-      hint={mode === "raw"
-        ? "Median lap on clean racing laps — no lap 1, pit laps, safety-car or yellow-flag laps, retired cars' trailing laps, or per-stint outliers. Fuel-corrected to race-end load for the gap."
-        : "The same clean laps in clear air, normalised to tyre age 10 with each stint's fitted degradation — what the car could do on equal tyres and fuel."}
+      hint={compact
+        ? `Top five of ${result.ok ? result.value.ranked.length : 0} drivers with enough clean laps. Open Pace for the full ranking and equal-tyre view.`
+        : mode === "raw"
+          ? "Median lap on clean racing laps — no lap 1, pit laps, safety-car or yellow-flag laps, retired cars' trailing laps, or per-stint outliers. Fuel-corrected to race-end load for the gap."
+          : "The same clean laps in clear air, normalised to tyre age 10 with each stint's fitted degradation — what the car could do on equal tyres and fuel."}
       method={{
         summary: "A lap counts when it has a time and none of: lap 1, pit in/out, SC/VSC/red flag, ≥20 % under a sector yellow, after a retirement, or more than 3 MAD above its stint's median (fuel-corrected). Raw pace is the median of those; true pace also requires clear air (≥1.5 s to the car ahead from the timing feed) and removes tyre age with the stint's own fitted slope.",
         steps: [`Minimum ${5} laps per driver; the interval is a 1 000-sample bootstrap of the median.`, `Fuel effect: ${model.fuel.secPerKg.toFixed(3)} s/kg (${model.fuel.source}).`],
         caveats: gated ? [`${gated} driver${gated === 1 ? "" : "s"} below the minimum sample are listed without a figure.`] : undefined,
       }}
       confidence={result.ok ? result.confidence : undefined}
-      actions={<Segmented size="sm" role="radiogroup" ariaLabel="Pace view" value={mode} onChange={setMode} options={[{ key: "raw", label: "Clean laps" }, { key: "true", label: "Equal tyres" }]} />}
+      dense={compact}
+      actions={!compact && <Segmented size="sm" role="radiogroup" ariaLabel="Pace view" value={mode} onChange={setMode} options={[{ key: "raw", label: "Clean laps" }, { key: "true", label: "Equal tyres" }]} />}
       share={{ meta: `${model.meeting?.meeting_name ?? ""} race pace`, filename: "openf1ow-race-pace" }}
     >
       <Gate result={result} what="race pace" inline={false}>
@@ -62,7 +65,7 @@ export default function TruePaceCard() {
           <>
             <Table
               columns={columns}
-              rows={v.ranked.map((r, i) => ({ ...r, rank: i + 1 }))}
+              rows={(compact ? v.ranked.slice(0, 5) : v.ranked).map((r, i) => ({ ...r, rank: i + 1 }))}
               rowKey={r => r.driver.driver_number}
               compact
               highlightKeys={sel.selected}
