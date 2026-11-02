@@ -81,7 +81,7 @@ footer.site { margin-top: 60px; padding: 20px 0; border-top: 1px solid rgba(255,
   <p><strong>Groq</strong> — Llama 3.3 70B for the race verdicts. Streamed via a Cloudflare Worker so the API key never reaches the browser.</p>
 
   <h2>Open source</h2>
-  <p>Source code at <a href="https://github.com/vassilispapadop/openf1ow" rel="noopener">github.com/vassilispapadop/openf1ow</a>. MIT licensed. React 18, TypeScript, Vite 6, and Cloudflare Workers static assets.</p>
+  <p>Source code at <a href="https://github.com/shravani22patil/RaceVector" rel="noopener">https://github.com/shravani22patil/RaceVector</a>. MIT licensed. React 18, TypeScript, Vite 6, and Cloudflare Workers static assets.</p>
 
   <h2>What it isn't</h2>
   <ul>
