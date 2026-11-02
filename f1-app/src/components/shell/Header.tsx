@@ -140,7 +140,7 @@ export default function Header({ meetings, mk, sessions, sk, drivers, dn, onRese
           as="a"
           size="sm"
           active
-          href="https://github.com/vassilispapadop/openf1ow"
+          href="https://github.com/shravani22patil/RaceVector"
           target="_blank"
           rel="noreferrer"
           aria-label="GitHub repository"
